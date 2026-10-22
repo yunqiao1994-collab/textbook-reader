@@ -2,76 +2,161 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>教材智能点读助手</title>
 <style>
-:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#202633;background:#f4f6fb}
-*{box-sizing:border-box}body{margin:0}header{background:#243b6b;color:#fff;padding:20px 24px}
-header h1{font-size:22px;margin:0 0 6px}header p{margin:0;color:#dbe5ff;font-size:14px}
-main{max-width:1200px;margin:22px auto;padding:0 16px;display:grid;grid-template-columns:300px 1fr;gap:18px}
-.card{background:#fff;border-radius:14px;padding:18px;box-shadow:0 4px 18px #14244a0d}
-h2{font-size:17px;margin:0 0 12px}.hint{font-size:13px;line-height:1.65;color:#657087}
-button,.btn{border:0;border-radius:9px;padding:10px 14px;background:#2f63d8;color:white;font-weight:600;cursor:pointer;display:inline-block}
-button.secondary{background:#e9eefb;color:#24427e}input[type=file]{width:100%;margin:10px 0 14px}
-#fileList{padding:0;list-style:none;margin:12px 0}#fileList li{padding:10px;border:1px solid #e7ebf3;border-radius:8px;margin-bottom:8px;overflow-wrap:anywhere}
-#fileList button{margin-top:7px;width:100%;text-align:left;background:#f0f4ff;color:#23427e}
-#viewer{min-height:440px;background:#f9fafc;border:1px dashed #cbd3e2;border-radius:10px;padding:14px;overflow:auto}
-#viewer iframe{width:100%;height:72vh;border:0;background:white}#viewer img{max-width:100%;height:auto;display:block;margin:auto}
-#textContent{white-space:pre-wrap;line-height:1.9;font-size:18px;overflow-wrap:anywhere}
-.word{cursor:pointer;border-radius:3px}.word:hover{background:#fff0ad}
-.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0}
-label.small{font-size:13px;color:#4c5870}select{padding:8px;border:1px solid #d5dceb;border-radius:8px;max-width:100%}
-.status{font-size:13px;color:#52617a;margin-top:10px}.badge{display:inline-block;background:#e9f6ee;color:#1b7844;padding:4px 8px;border-radius:99px;font-size:12px}
-footer{text-align:center;color:#758099;font-size:12px;padding:18px}
-@media(max-width:760px){main{grid-template-columns:1fr}#viewer iframe{height:60vh}header{padding:18px}}
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#172033;background:#f4f6fb}
+*{box-sizing:border-box}body{margin:0}header{background:#233b70;color:white;padding:18px 20px}
+header h1{margin:0 0 5px;font-size:22px}header p{margin:0;font-size:13px;opacity:.9}
+main{max-width:1100px;margin:18px auto;padding:0 14px}
+.panel{background:white;border-radius:12px;padding:15px;margin-bottom:14px;box-shadow:0 2px 10px #1720330c}
+.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+button,.filelabel,select{border:1px solid #ccd4e2;border-radius:8px;padding:10px 12px;background:#fff;font-size:14px;cursor:pointer}
+button.primary{background:#2b58a4;color:#fff;border-color:#2b58a4}
+input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1.6}
+#status{margin-top:10px;font-size:14px;color:#2b58a4;white-space:pre-wrap}
+#pages{display:flex;flex-direction:column;gap:18px}
+.page-wrap{background:white;padding:8px;box-shadow:0 2px 12px #1720331a;border-radius:4px;overflow:auto}
+.page{position:relative;margin:auto;width:max-content;max-width:100%}
+.page canvas{display:block;max-width:100%;height:auto}
+.overlay{position:absolute;inset:0;pointer-events:none}
+.wordline{position:absolute;pointer-events:auto;border:1px solid transparent;background:rgba(255,226,90,.01);padding:0;margin:0;cursor:pointer;overflow:hidden;color:transparent;font-size:1px;line-height:1}
+.wordline:hover{background:rgba(255,220,55,.25);border-color:#d3a900}
+.wordline:focus{outline:2px solid #2b58a4}
+.page-title{font-size:12px;color:#65718a;margin:4px 0 8px}
+@media(max-width:600px){header h1{font-size:19px}.panel{padding:12px}.controls>*{width:100%}select,button{min-height:42px}}
 </style>
 </head>
 <body>
-<header><h1>📚 教材智能点读助手</h1><p>网页测试版 · 上传教材、查看页面、点击文字朗读</p></header>
+<header><h1>📚 教材智能点读助手</h1><p>扫描版 PDF · OCR 文字识别 · 点击文字朗读</p></header>
 <main>
-<section class="card">
-<h2>① 导入教材</h2>
-<p class="hint">支持 PDF、图片、TXT。Word（DOCX）会在后续版本加入更完整的解析。文件在当前浏览器中打开，不会自动上传到服务器。</p>
-<input id="fileInput" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.docx">
-<button id="addBtn">选择并打开文件</button>
-<ul id="fileList"></ul>
-<hr style="border:0;border-top:1px solid #edf0f5;margin:18px 0">
-<h2>② 朗读设置</h2>
-<div class="controls"><label class="small" for="voiceSelect">语音</label><select id="voiceSelect"><option>正在读取系统语音…</option></select></div>
-<div class="controls"><label class="small" for="rate">语速</label><input id="rate" type="range" min="0.6" max="1.4" step="0.1" value="1"><span id="rateVal">1.0×</span></div>
-<div class="controls"><button id="stopBtn" class="secondary">停止朗读</button></div>
-<p class="hint">提示：语音由当前浏览器/设备提供，是否有普通话、越南语或英语声音取决于设备设置。</p>
-<div id="status" class="status">状态：等待导入教材。</div>
+<section class="panel">
+ <div class="controls">
+  <input id="pdfFile" type="file" accept="application/pdf,.pdf">
+  <select id="lang" aria-label="识别语言">
+   <option value="chi_sim+eng">简体中文 + 英语</option>
+   <option value="vie+eng">越南语 + 英语</option>
+   <option value="eng">英语</option>
+   <option value="chi_sim">简体中文</option>
+  </select>
+  <select id="voiceLang" aria-label="朗读语言">
+   <option value="auto">自动选择语音</option><option value="zh-CN">中文普通话</option><option value="vi-VN">越南语</option><option value="en-US">英语</option>
+  </select>
+  <button id="ocrBtn" class="primary" disabled>识别并生成点读区域</button>
+  <button id="stopBtn">停止朗读</button>
+ </div>
+ <div id="status">请选择一本扫描版 PDF。文件在浏览器中处理，不会上传到本网站服务器。</div>
+ <p class="hint">首次识别需要从公开 CDN 下载识别引擎和语言数据，速度取决于网络与设备。扫描页越多，识别耗时越长。点击识别后的文字区域即可朗读。</p>
 </section>
-<section class="card">
-<h2>教材预览 <span class="badge">测试版</span></h2>
-<div class="controls"><button id="readBtn" class="secondary">朗读已提取文字</button><button id="clearBtn" class="secondary">清空当前文件</button></div>
-<div id="viewer"><p class="hint">请从左侧选择一个 PDF、图片或 TXT 文件。</p></div>
-</section>
+<section id="pages"></section>
 </main>
-<footer>教材智能点读助手 · 网页原型。此版本尚未集成云端 OCR，扫描版 PDF 和图片暂不能自动识别文字。</footer>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
-const fileInput=document.getElementById('fileInput'), addBtn=document.getElementById('addBtn'), fileList=document.getElementById('fileList'), viewer=document.getElementById('viewer'), statusEl=document.getElementById('status');
-const voiceSelect=document.getElementById('voiceSelect'), rate=document.getElementById('rate'), rateVal=document.getElementById('rateVal');
-let currentText='', currentUrl=null, voices=[];
-function setStatus(s){statusEl.textContent='状态：'+s}
-function loadVoices(){voices=window.speechSynthesis? speechSynthesis.getVoices():[];voiceSelect.innerHTML='';if(!voices.length){let o=document.createElement('option');o.textContent='未检测到可用语音';voiceSelect.append(o);return}
-voices.forEach((v,i)=>{let o=document.createElement('option');o.value=i;o.textContent=`${v.name} (${v.lang})`;voiceSelect.append(o)});}
-if('speechSynthesis' in window){loadVoices();speechSynthesis.onvoiceschanged=loadVoices}else{voiceSelect.innerHTML='<option>此浏览器不支持语音合成</option>'}
-rate.addEventListener('input',()=>rateVal.textContent=Number(rate.value).toFixed(1)+'×');
-function speak(text){if(!text.trim()){setStatus('没有可朗读的文字。');return}if(!('speechSynthesis' in window)){setStatus('当前浏览器不支持语音合成。');return}speechSynthesis.cancel();let u=new SpeechSynthesisUtterance(text);let v=voices[Number(voiceSelect.value)];if(v){u.voice=v;u.lang=v.lang}u.rate=Number(rate.value);u.onstart=()=>setStatus('正在朗读…');u.onend=()=>setStatus('朗读完成。');u.onerror=()=>setStatus('语音播放失败，请尝试切换语音。');speechSynthesis.speak(u)}
-function escapeHtml(s){return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function renderText(text){currentText=text;const chunks=text.split(/(\s+)/);viewer.innerHTML='<div id="textContent">'+chunks.map(c=>/^\s+$/.test(c)?escapeHtml(c):'<span class="word" title="点击朗读">'+escapeHtml(c)+'</span>').join('')+'</div><p class="hint">点击任意文字片段即可朗读该片段。当前文字提取仅适用于 TXT；PDF 显示原页。</p>';viewer.querySelectorAll('.word').forEach(el=>el.addEventListener('click',()=>speak(el.textContent)))}
-function openFile(file){if(currentUrl)URL.revokeObjectURL(currentUrl);currentUrl=URL.createObjectURL(file);let ext=file.name.split('.').pop().toLowerCase();viewer.innerHTML='';currentText='';
-if(ext==='pdf'){let iframe=document.createElement('iframe');iframe.src=currentUrl;viewer.append(iframe);setStatus('PDF 已打开并显示原始页面。此版本尚未加入 PDF 文字层提取与 OCR。')}
-else if(['png','jpg','jpeg','webp'].includes(ext)){let img=document.createElement('img');img.src=currentUrl;img.alt=file.name;viewer.append(img);setStatus('图片已打开。图片文字识别（OCR）将在后续版本加入。')}
-else if(ext==='txt'){let r=new FileReader();r.onload=()=>{renderText(String(r.result||''));setStatus('TXT 已读取，可点击文字朗读。')};r.readAsText(file)}
-else if(ext==='docx'){viewer.innerHTML='<p>已选择 DOCX 文件，但此测试版还未集成 Word 解析组件。请暂时将 Word 另存为 PDF 或 TXT 后导入。</p>';setStatus('DOCX 解析尚未加入。')}
-else {setStatus('暂不支持此文件类型。')}
-let li=document.createElement('li');li.textContent=file.name;let b=document.createElement('button');b.textContent='打开此文件';b.onclick=()=>openFile(file);li.appendChild(b);fileList.prepend(li)}
-addBtn.onclick=()=>{const f=fileInput.files[0];if(!f){setStatus('请先选择一个文件。');return}openFile(f)};
-document.getElementById('readBtn').onclick=()=>speak(currentText);
-document.getElementById('stopBtn').onclick=()=>{if(window.speechSynthesis)speechSynthesis.cancel();setStatus('已停止朗读。')};
-document.getElementById('clearBtn').onclick=()=>{if(currentUrl)URL.revokeObjectURL(currentUrl);currentUrl=null;currentText='';viewer.innerHTML='<p class="hint">请从左侧选择一个 PDF、图片或 TXT 文件。</p>';setStatus('已清空当前预览。')};
+(() => {
+ const fileInput=document.getElementById('pdfFile'), langSelect=document.getElementById('lang'),
+ voiceSelect=document.getElementById('voiceLang'), ocrBtn=document.getElementById('ocrBtn'),
+ status=document.getElementById('status'), pages=document.getElementById('pages');
+ let pdfDoc=null, worker=null, currentFileName='';
+ if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+ const say=(s)=>status.textContent=s;
+ fileInput.addEventListener('change', async()=>{
+   pages.innerHTML=''; pdfDoc=null; ocrBtn.disabled=true;
+   const f=fileInput.files[0]; if(!f)return;
+   if(f.type!=='application/pdf'&&!f.name.toLowerCase().endsWith('.pdf')){say('目前此版本先支持 PDF 文件。');return}
+   currentFileName=f.name; say('正在打开 PDF…');
+   try{
+     const bytes=await f.arrayBuffer();
+     pdfDoc=await pdfjsLib.getDocument({data:bytes}).promise;
+     say(`已打开：${f.name}\n共 ${pdfDoc.numPages} 页。点击“识别并生成点读区域”开始 OCR。`);
+     ocrBtn.disabled=false;
+     for(let n=1;n<=pdfDoc.numPages;n++){
+       const pg=await pdfDoc.getPage(n);
+       const viewport=pg.getViewport({scale:1.25});
+       const wrap=document.createElement('div');wrap.className='page-wrap';
+       const title=document.createElement('div');title.className='page-title';title.textContent=`第 ${n} 页`;
+       const page=document.createElement('div');page.className='page';page.dataset.page=n;
+       const canvas=document.createElement('canvas');canvas.width=Math.floor(viewport.width);canvas.height=Math.floor(viewport.height);
+       canvas.style.width=viewport.width+'px';canvas.style.height=viewport.height+'px';
+       const overlay=document.createElement('div');overlay.className='overlay';
+       page.append(canvas,overlay);wrap.append(title,page);pages.append(wrap);
+       await pg.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
+       page.dataset.renderScale=viewport.scale;
+     }
+     say(`PDF 已显示：${f.name}（${pdfDoc.numPages} 页）。准备就绪，可以开始识别。`);
+   }catch(e){console.error(e);say('打开 PDF 失败：'+(e.message||e));}
+ });
+ ocrBtn.addEventListener('click',async()=>{
+   if(!pdfDoc)return;
+   ocrBtn.disabled=true;
+   try{
+     if(worker){try{await worker.terminate()}catch(e){} worker=null;}
+     const selected=langSelect.value;
+     say('正在启动文字识别引擎…首次使用会下载语言数据，请保持页面打开。');
+     worker=await Tesseract.createWorker(selected,1,{logger:m=>{
+       if(m.status==='recognizing text')say(`正在识别：第 ${activePage} 页 / ${pdfDoc.numPages} 页（${Math.round((m.progress||0)*100)}%）`);
+       else if(m.status)say('识别引擎：'+m.status);
+     }});
+     for(let n=1;n<=pdfDoc.numPages;n++){
+       activePage=n;
+       const page=pages.querySelector(`.page[data-page="${n}"]`);
+       const canvas=page.querySelector('canvas'), overlay=page.querySelector('.overlay');
+       overlay.innerHTML='';
+       const result=await worker.recognize(canvas);
+       const words=(result.data.words||[]).filter(w=>w.text&&w.text.trim()&&w.confidence>15);
+       const lines=groupLines(words);
+       const rect=canvas.getBoundingClientRect();
+       const scaleX=canvas.clientWidth/canvas.width, scaleY=canvas.clientHeight/canvas.height;
+       lines.forEach(line=>{
+         const xs=line.words.map(w=>w.bbox.x0), ys=line.words.map(w=>w.bbox.y0),
+               xe=line.words.map(w=>w.bbox.x1), ye=line.words.map(w=>w.bbox.y1);
+         const x0=Math.min(...xs),y0=Math.min(...ys),x1=Math.max(...xe),y1=Math.max(...ye);
+         const text=line.words.map(w=>w.text).join(selected.includes('chi_sim')?'':' ');
+         const b=document.createElement('button');b.className='wordline';b.type='button';b.title='点击朗读：'+text;
+         b.setAttribute('aria-label','朗读：'+text);b.textContent=text;
+         b.style.left=(x0*scaleX)+'px';b.style.top=(y0*scaleY)+'px';
+         b.style.width=Math.max(8,(x1-x0)*scaleX)+'px';b.style.height=Math.max(8,(y1-y0)*scaleY)+'px';
+         b.addEventListener('click',()=>speak(text));
+         overlay.appendChild(b);
+       });
+       pages.querySelector(`.page-wrap:nth-child(${n}) .page-title`).textContent=`第 ${n} 页 · 已识别 ${lines.length} 行`;
+     }
+     say('识别完成！点击页面中出现的文字区域即可朗读。若识别语言不正确，可更换语言后重新识别。');
+   }catch(e){console.error(e);say('识别失败：'+(e.message||e)+'\n请检查网络是否能访问 CDN，或尝试减少 PDF 页数。');}
+   finally{ocrBtn.disabled=false;}
+ });
+ let activePage=1;
+ function groupLines(words){
+   const lines=[];
+   for(const w of words.slice().sort((a,b)=>((a.bbox.y0+a.bbox.y1)/2)-((b.bbox.y0+b.bbox.y1)/2)||a.bbox.x0-b.bbox.x0)){
+     const cy=(w.bbox.y0+w.bbox.y1)/2;
+     let line=lines.find(l=>Math.abs(l.cy-cy)<Math.max(8,(w.bbox.y1-w.bbox.y0)*0.55));
+     if(!line){line={cy,words:[]};lines.push(line)}
+     line.words.push(w);line.cy=line.words.reduce((s,x)=>s+(x.bbox.y0+x.bbox.y1)/2,0)/line.words.length;
+   }
+   lines.forEach(l=>l.words.sort((a,b)=>a.bbox.x0-b.bbox.x0));
+   return lines.sort((a,b)=>a.cy-b.cy);
+ }
+ function speak(text){
+   if(!('speechSynthesis' in window)){say('当前浏览器不支持语音朗读，请尝试最新版 Chrome 或 Edge。');return}
+   speechSynthesis.cancel();
+   const u=new SpeechSynthesisUtterance(text);
+   let chosen=voiceSelect.value;
+   if(chosen==='auto'){
+     const l=langSelect.value;
+     chosen=l.includes('vie')?'vi-VN':l.includes('chi_sim')?'zh-CN':'en-US';
+   }
+   u.lang=chosen;
+   const voices=speechSynthesis.getVoices();
+   const voice=voices.find(v=>v.lang.toLowerCase()===chosen.toLowerCase())||voices.find(v=>v.lang.toLowerCase().startsWith(chosen.slice(0,2).toLowerCase()));
+   if(voice)u.voice=voice;
+   u.onerror=()=>say('朗读失败。请检查设备是否有对应语言的语音。');
+   u.onstart=()=>say('正在朗读：'+text.slice(0,120));
+   u.onend=()=>say('朗读完成。点击其他文字可继续。');
+   speechSynthesis.speak(u);
+ }
+ document.getElementById('stopBtn').addEventListener('click',()=>{speechSynthesis.cancel();say('已停止朗读。')});
+})();
 </script>
-</body></html>
+</body>
+</html>
