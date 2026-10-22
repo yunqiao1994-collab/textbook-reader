@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>教材智能点读助手</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#202633;background:#f4f6fb}
+*{box-sizing:border-box}body{margin:0}header{background:#243b6b;color:#fff;padding:20px 24px}
+header h1{font-size:22px;margin:0 0 6px}header p{margin:0;color:#dbe5ff;font-size:14px}
+main{max-width:1200px;margin:22px auto;padding:0 16px;display:grid;grid-template-columns:300px 1fr;gap:18px}
+.card{background:#fff;border-radius:14px;padding:18px;box-shadow:0 4px 18px #14244a0d}
+h2{font-size:17px;margin:0 0 12px}.hint{font-size:13px;line-height:1.65;color:#657087}
+button,.btn{border:0;border-radius:9px;padding:10px 14px;background:#2f63d8;color:white;font-weight:600;cursor:pointer;display:inline-block}
+button.secondary{background:#e9eefb;color:#24427e}input[type=file]{width:100%;margin:10px 0 14px}
+#fileList{padding:0;list-style:none;margin:12px 0}#fileList li{padding:10px;border:1px solid #e7ebf3;border-radius:8px;margin-bottom:8px;overflow-wrap:anywhere}
+#fileList button{margin-top:7px;width:100%;text-align:left;background:#f0f4ff;color:#23427e}
+#viewer{min-height:440px;background:#f9fafc;border:1px dashed #cbd3e2;border-radius:10px;padding:14px;overflow:auto}
+#viewer iframe{width:100%;height:72vh;border:0;background:white}#viewer img{max-width:100%;height:auto;display:block;margin:auto}
+#textContent{white-space:pre-wrap;line-height:1.9;font-size:18px;overflow-wrap:anywhere}
+.word{cursor:pointer;border-radius:3px}.word:hover{background:#fff0ad}
+.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0}
+label.small{font-size:13px;color:#4c5870}select{padding:8px;border:1px solid #d5dceb;border-radius:8px;max-width:100%}
+.status{font-size:13px;color:#52617a;margin-top:10px}.badge{display:inline-block;background:#e9f6ee;color:#1b7844;padding:4px 8px;border-radius:99px;font-size:12px}
+footer{text-align:center;color:#758099;font-size:12px;padding:18px}
+@media(max-width:760px){main{grid-template-columns:1fr}#viewer iframe{height:60vh}header{padding:18px}}
+</style>
+</head>
+<body>
+<header><h1>📚 教材智能点读助手</h1><p>网页测试版 · 上传教材、查看页面、点击文字朗读</p></header>
+<main>
+<section class="card">
+<h2>① 导入教材</h2>
+<p class="hint">支持 PDF、图片、TXT。Word（DOCX）会在后续版本加入更完整的解析。文件在当前浏览器中打开，不会自动上传到服务器。</p>
+<input id="fileInput" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.docx">
+<button id="addBtn">选择并打开文件</button>
+<ul id="fileList"></ul>
+<hr style="border:0;border-top:1px solid #edf0f5;margin:18px 0">
+<h2>② 朗读设置</h2>
+<div class="controls"><label class="small" for="voiceSelect">语音</label><select id="voiceSelect"><option>正在读取系统语音…</option></select></div>
+<div class="controls"><label class="small" for="rate">语速</label><input id="rate" type="range" min="0.6" max="1.4" step="0.1" value="1"><span id="rateVal">1.0×</span></div>
+<div class="controls"><button id="stopBtn" class="secondary">停止朗读</button></div>
+<p class="hint">提示：语音由当前浏览器/设备提供，是否有普通话、越南语或英语声音取决于设备设置。</p>
+<div id="status" class="status">状态：等待导入教材。</div>
+</section>
+<section class="card">
+<h2>教材预览 <span class="badge">测试版</span></h2>
+<div class="controls"><button id="readBtn" class="secondary">朗读已提取文字</button><button id="clearBtn" class="secondary">清空当前文件</button></div>
+<div id="viewer"><p class="hint">请从左侧选择一个 PDF、图片或 TXT 文件。</p></div>
+</section>
+</main>
+<footer>教材智能点读助手 · 网页原型。此版本尚未集成云端 OCR，扫描版 PDF 和图片暂不能自动识别文字。</footer>
+<script>
+const fileInput=document.getElementById('fileInput'), addBtn=document.getElementById('addBtn'), fileList=document.getElementById('fileList'), viewer=document.getElementById('viewer'), statusEl=document.getElementById('status');
+const voiceSelect=document.getElementById('voiceSelect'), rate=document.getElementById('rate'), rateVal=document.getElementById('rateVal');
+let currentText='', currentUrl=null, voices=[];
+function setStatus(s){statusEl.textContent='状态：'+s}
+function loadVoices(){voices=window.speechSynthesis? speechSynthesis.getVoices():[];voiceSelect.innerHTML='';if(!voices.length){let o=document.createElement('option');o.textContent='未检测到可用语音';voiceSelect.append(o);return}
+voices.forEach((v,i)=>{let o=document.createElement('option');o.value=i;o.textContent=`${v.name} (${v.lang})`;voiceSelect.append(o)});}
+if('speechSynthesis' in window){loadVoices();speechSynthesis.onvoiceschanged=loadVoices}else{voiceSelect.innerHTML='<option>此浏览器不支持语音合成</option>'}
+rate.addEventListener('input',()=>rateVal.textContent=Number(rate.value).toFixed(1)+'×');
+function speak(text){if(!text.trim()){setStatus('没有可朗读的文字。');return}if(!('speechSynthesis' in window)){setStatus('当前浏览器不支持语音合成。');return}speechSynthesis.cancel();let u=new SpeechSynthesisUtterance(text);let v=voices[Number(voiceSelect.value)];if(v){u.voice=v;u.lang=v.lang}u.rate=Number(rate.value);u.onstart=()=>setStatus('正在朗读…');u.onend=()=>setStatus('朗读完成。');u.onerror=()=>setStatus('语音播放失败，请尝试切换语音。');speechSynthesis.speak(u)}
+function escapeHtml(s){return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function renderText(text){currentText=text;const chunks=text.split(/(\s+)/);viewer.innerHTML='<div id="textContent">'+chunks.map(c=>/^\s+$/.test(c)?escapeHtml(c):'<span class="word" title="点击朗读">'+escapeHtml(c)+'</span>').join('')+'</div><p class="hint">点击任意文字片段即可朗读该片段。当前文字提取仅适用于 TXT；PDF 显示原页。</p>';viewer.querySelectorAll('.word').forEach(el=>el.addEventListener('click',()=>speak(el.textContent)))}
+function openFile(file){if(currentUrl)URL.revokeObjectURL(currentUrl);currentUrl=URL.createObjectURL(file);let ext=file.name.split('.').pop().toLowerCase();viewer.innerHTML='';currentText='';
+if(ext==='pdf'){let iframe=document.createElement('iframe');iframe.src=currentUrl;viewer.append(iframe);setStatus('PDF 已打开并显示原始页面。此版本尚未加入 PDF 文字层提取与 OCR。')}
+else if(['png','jpg','jpeg','webp'].includes(ext)){let img=document.createElement('img');img.src=currentUrl;img.alt=file.name;viewer.append(img);setStatus('图片已打开。图片文字识别（OCR）将在后续版本加入。')}
+else if(ext==='txt'){let r=new FileReader();r.onload=()=>{renderText(String(r.result||''));setStatus('TXT 已读取，可点击文字朗读。')};r.readAsText(file)}
+else if(ext==='docx'){viewer.innerHTML='<p>已选择 DOCX 文件，但此测试版还未集成 Word 解析组件。请暂时将 Word 另存为 PDF 或 TXT 后导入。</p>';setStatus('DOCX 解析尚未加入。')}
+else {setStatus('暂不支持此文件类型。')}
+let li=document.createElement('li');li.textContent=file.name;let b=document.createElement('button');b.textContent='打开此文件';b.onclick=()=>openFile(file);li.appendChild(b);fileList.prepend(li)}
+addBtn.onclick=()=>{const f=fileInput.files[0];if(!f){setStatus('请先选择一个文件。');return}openFile(f)};
+document.getElementById('readBtn').onclick=()=>speak(currentText);
+document.getElementById('stopBtn').onclick=()=>{if(window.speechSynthesis)speechSynthesis.cancel();setStatus('已停止朗读。')};
+document.getElementById('clearBtn').onclick=()=>{if(currentUrl)URL.revokeObjectURL(currentUrl);currentUrl=null;currentText='';viewer.innerHTML='<p class="hint">请从左侧选择一个 PDF、图片或 TXT 文件。</p>';setStatus('已清空当前预览。')};
+</script>
+</body></html>
