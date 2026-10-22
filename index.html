@@ -39,14 +39,32 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
    <option value="eng">英语</option>
    <option value="chi_sim">简体中文</option>
   </select>
-  <select id="voiceLang" aria-label="朗读语言">
-   <option value="auto">自动选择语音</option><option value="zh-CN">中文普通话</option><option value="vi-VN">越南语</option><option value="en-US">英语</option>
+  <select id="voiceLang" aria-label="地域口音">
+   <option value="auto">口音：自动选择</option>
+   <optgroup label="中文">
+    <option value="zh-CN">普通话（中国大陆）</option>
+    <option value="zh-TW">台湾国语（设备支持时）</option>
+    <option value="zh-HK">香港粤语（设备支持时）</option>
+   </optgroup>
+   <optgroup label="越南语">
+    <option value="vi-VN">越南语（越南）</option>
+   </optgroup>
+   <optgroup label="英语">
+    <option value="en-US">英语（美国）</option>
+    <option value="en-GB">英语（英国）</option>
+    <option value="en-AU">英语（澳大利亚）</option>
+   </optgroup>
   </select>
+  <label style="display:flex;gap:8px;align-items:center;border:1px solid #ccd4e2;border-radius:8px;padding:8px 10px;background:#fff">
+   语速 <input id="rate" type="range" min="0.6" max="1.4" value="1" step="0.1" style="width:100px">
+   <span id="rateValue">1.0×</span>
+  </label>
+  <button id="previewVoiceBtn" type="button">试听当前语音</button>
   <button id="ocrBtn" class="primary" disabled>识别并生成点读区域</button>
   <button id="stopBtn">停止朗读</button>
  </div>
  <div id="status">请选择一本扫描版 PDF。文件在浏览器中处理，不会上传到本网站服务器。</div>
- <p class="hint">首次识别需要从公开 CDN 下载识别引擎和语言数据，速度取决于网络与设备。扫描页越多，识别耗时越长。点击识别后的文字区域即可朗读。</p>
+ <p class="hint">首次识别需要联网下载识别引擎和语言数据。识别结果会保存在当前设备、当前浏览器中；下次选择同一份 PDF 和相同识别语言可快速恢复。可选择设备支持的地域语音、调节语速，并试听当前语音。清除浏览器网站数据后缓存可能消失，不会自动同步到其他设备。点击识别后的文字区域即可朗读。</p>
 </section>
 <section id="pages"></section>
 </main>
@@ -86,43 +104,96 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
      say(`PDF 已显示：${f.name}（${pdfDoc.numPages} 页）。准备就绪，可以开始识别。`);
    }catch(e){console.error(e);say('打开 PDF 失败：'+(e.message||e));}
  });
+
+ // OCR cache: IndexedDB stores recognized word boxes in this browser on this device.
+ const CACHE_DB='textbook-reader-ocr-cache-v1', CACHE_STORE='pages';
+ function openCacheDB(){
+   return new Promise((resolve,reject)=>{
+     const req=indexedDB.open(CACHE_DB,1);
+     req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(CACHE_STORE))db.createObjectStore(CACHE_STORE,{keyPath:'key'});};
+     req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+   });
+ }
+ async function cacheGet(key){
+   try{const db=await openCacheDB();return await new Promise((resolve,reject)=>{
+     const tx=db.transaction(CACHE_STORE,'readonly'),req=tx.objectStore(CACHE_STORE).get(key);
+     req.onsuccess=()=>resolve(req.result?req.result.value:null);req.onerror=()=>reject(req.error);
+   });}catch(e){console.warn('OCR cache read failed',e);return null;}
+ }
+ async function cacheSet(key,value){
+   try{const db=await openCacheDB();return await new Promise((resolve,reject)=>{
+     const tx=db.transaction(CACHE_STORE,'readwrite');tx.objectStore(CACHE_STORE).put({key,value});
+     tx.oncomplete=()=>resolve(true);tx.onerror=()=>reject(tx.error);
+   });}catch(e){console.warn('OCR cache write failed',e);return false;}
+ }
+ async function fileFingerprint(file){
+   const bytes=await file.arrayBuffer();
+   const digest=await crypto.subtle.digest('SHA-256',bytes);
+   const hex=Array.from(new Uint8Array(digest)).map(b=>b.toString(16).padStart(2,'0')).join('');
+   return {hex,bytes};
+ }
+ function showCachedLines(pageNum, lines, language){
+   const page=pages.querySelector(`.page[data-page="${pageNum}"]`);
+   if(!page)return;
+   const canvas=page.querySelector('canvas'),overlay=page.querySelector('.overlay');
+   overlay.innerHTML='';
+   const scaleX=canvas.clientWidth/canvas.width,scaleY=canvas.clientHeight/canvas.height;
+   lines.forEach(line=>{
+     const x0=line.bbox.x0,y0=line.bbox.y0,x1=line.bbox.x1,y1=line.bbox.y1,text=line.text;
+     const b=document.createElement('button');b.className='wordline';b.type='button';b.title='点击朗读：'+text;
+     b.setAttribute('aria-label','朗读：'+text);b.textContent=text;
+     b.style.left=(x0*scaleX)+'px';b.style.top=(y0*scaleY)+'px';
+     b.style.width=Math.max(8,(x1-x0)*scaleX)+'px';b.style.height=Math.max(8,(y1-y0)*scaleY)+'px';
+     b.addEventListener('click',()=>speak(text));overlay.appendChild(b);
+   });
+   const wrap=page.closest('.page-wrap'),title=wrap&&wrap.querySelector('.page-title');
+   if(title)title.textContent=`第 ${pageNum} 页 · 已识别 ${lines.length} 行（缓存）`;
+ }
+
  ocrBtn.addEventListener('click',async()=>{
    if(!pdfDoc)return;
    ocrBtn.disabled=true;
    try{
+     const f=fileInput.files[0], language=langSelect.value;
+     say('正在检查本机是否保存过这份教材的识别结果…');
+     const fp=await fileFingerprint(f);
+     const cacheKey=fp.hex+'|'+language+'|ocr-v1';
+     let cached=await cacheGet(cacheKey);
+     if(cached && cached.pages && cached.pages.length===pdfDoc.numPages){
+       cached.pages.forEach((lines,i)=>showCachedLines(i+1,lines,language));
+       say(`已从本机缓存恢复识别结果：${f.name}\n共 ${pdfDoc.numPages} 页。无需重新 OCR，点击文字即可朗读。`);
+       return;
+     }
      if(worker){try{await worker.terminate()}catch(e){} worker=null;}
-     const selected=langSelect.value;
      say('正在启动文字识别引擎…首次使用会下载语言数据，请保持页面打开。');
-     worker=await Tesseract.createWorker(selected,1,{logger:m=>{
+     worker=await Tesseract.createWorker(language,1,{logger:m=>{
        if(m.status==='recognizing text')say(`正在识别：第 ${activePage} 页 / ${pdfDoc.numPages} 页（${Math.round((m.progress||0)*100)}%）`);
        else if(m.status)say('识别引擎：'+m.status);
      }});
+     const savedPages=[];
      for(let n=1;n<=pdfDoc.numPages;n++){
        activePage=n;
        const page=pages.querySelector(`.page[data-page="${n}"]`);
-       const canvas=page.querySelector('canvas'), overlay=page.querySelector('.overlay');
-       overlay.innerHTML='';
+       const canvas=page.querySelector('canvas');
        const result=await worker.recognize(canvas);
        const words=(result.data.words||[]).filter(w=>w.text&&w.text.trim()&&w.confidence>15);
-       const lines=groupLines(words);
-       const rect=canvas.getBoundingClientRect();
-       const scaleX=canvas.clientWidth/canvas.width, scaleY=canvas.clientHeight/canvas.height;
-       lines.forEach(line=>{
-         const xs=line.words.map(w=>w.bbox.x0), ys=line.words.map(w=>w.bbox.y0),
-               xe=line.words.map(w=>w.bbox.x1), ye=line.words.map(w=>w.bbox.y1);
-         const x0=Math.min(...xs),y0=Math.min(...ys),x1=Math.max(...xe),y1=Math.max(...ye);
-         const text=line.words.map(w=>w.text).join(selected.includes('chi_sim')?'':' ');
-         const b=document.createElement('button');b.className='wordline';b.type='button';b.title='点击朗读：'+text;
-         b.setAttribute('aria-label','朗读：'+text);b.textContent=text;
-         b.style.left=(x0*scaleX)+'px';b.style.top=(y0*scaleY)+'px';
-         b.style.width=Math.max(8,(x1-x0)*scaleX)+'px';b.style.height=Math.max(8,(y1-y0)*scaleY)+'px';
-         b.addEventListener('click',()=>speak(text));
-         overlay.appendChild(b);
+       const grouped=groupLines(words);
+       const lines=grouped.map(line=>{
+         const xs=line.words.map(w=>w.bbox.x0),ys=line.words.map(w=>w.bbox.y0),
+               xe=line.words.map(w=>w.bbox.x1),ye=line.words.map(w=>w.bbox.y1);
+         return {bbox:{x0:Math.min(...xs),y0:Math.min(...ys),x1:Math.max(...xe),y1:Math.max(...ye)},
+           text:line.words.map(w=>w.text).join(language.includes('chi_sim')?'':' ')};
        });
-       pages.querySelector(`.page-wrap:nth-child(${n}) .page-title`).textContent=`第 ${n} 页 · 已识别 ${lines.length} 行`;
+       savedPages.push(lines);
+       showCachedLines(n,lines,language);
+       // Save after each page so an interrupted scan can still be resumed in a future update.
+       await cacheSet(cacheKey,{pages:savedPages.concat(Array(Math.max(0,pdfDoc.numPages-savedPages.length)).fill(null)),partial:true});
+       const wrap=page.closest('.page-wrap'),title=wrap&&wrap.querySelector('.page-title');
+       if(title)title.textContent=`第 ${n} 页 · 已识别 ${lines.length} 行`;
      }
-     say('识别完成！点击页面中出现的文字区域即可朗读。若识别语言不正确，可更换语言后重新识别。');
-   }catch(e){console.error(e);say('识别失败：'+(e.message||e)+'\n请检查网络是否能访问 CDN，或尝试减少 PDF 页数。');}
+     await cacheSet(cacheKey,{pages:savedPages,partial:false});
+     say('识别完成，结果已保存在这台设备的浏览器中。下次上传同一份 PDF 并选择相同识别语言，可以直接恢复结果，免去重新 OCR。点击文字即可朗读。');
+   }catch(e){console.error(e);say('处理失败：'+(e.message||e)+'\n请检查浏览器存储权限、网络或尝试较小的 PDF。');}
    finally{ocrBtn.disabled=false;}
  });
  let activePage=1;
@@ -147,15 +218,30 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
      chosen=l.includes('vie')?'vi-VN':l.includes('chi_sim')?'zh-CN':'en-US';
    }
    u.lang=chosen;
+   const rateInput=document.getElementById('rate');
+   u.rate=rateInput?Number(rateInput.value):1;
    const voices=speechSynthesis.getVoices();
-   const voice=voices.find(v=>v.lang.toLowerCase()===chosen.toLowerCase())||voices.find(v=>v.lang.toLowerCase().startsWith(chosen.slice(0,2).toLowerCase()));
+   // Prefer an exact locale match. If unavailable, do not silently claim the requested accent is supported.
+   const voice=voices.find(v=>v.lang.toLowerCase()===chosen.toLowerCase());
    if(voice)u.voice=voice;
-   u.onerror=()=>say('朗读失败。请检查设备是否有对应语言的语音。');
-   u.onstart=()=>say('正在朗读：'+text.slice(0,120));
+   else {
+     const sameFamily=voices.find(v=>v.lang.toLowerCase().startsWith(chosen.slice(0,2).toLowerCase()));
+     if(sameFamily)u.voice=sameFamily;
+     if(chosen!=='auto')say('设备未找到完全匹配的语音：'+chosen+'。将尝试使用可用的同语言语音；如无声音，请在系统中安装对应语音包。');
+   }
+   u.onerror=(e)=>say('朗读失败：'+(e.error||'请检查浏览器、音量及对应语言语音包。'));
+   u.onstart=()=>say('正在朗读（'+chosen+'）：'+text.slice(0,120));
    u.onend=()=>say('朗读完成。点击其他文字可继续。');
    speechSynthesis.speak(u);
  }
  document.getElementById('stopBtn').addEventListener('click',()=>{speechSynthesis.cancel();say('已停止朗读。')});
+ const rateInput=document.getElementById('rate'),rateValue=document.getElementById('rateValue');
+ rateInput.addEventListener('input',()=>rateValue.textContent=Number(rateInput.value).toFixed(1)+'×');
+ document.getElementById('previewVoiceBtn').addEventListener('click',()=>{
+   const l=langSelect.value;
+   const demo=l.includes('vie')?'Xin chào! Đây là giọng đọc thử.':l.includes('chi_sim')?'你好！这是当前语音的试听。':'Hello! This is a voice preview.';
+   speak(demo);
+ });
 })();
 </script>
 </body>
