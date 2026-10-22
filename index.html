@@ -18,7 +18,7 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
 #pages{display:flex;flex-direction:column;gap:18px}
 .page-wrap{background:white;padding:8px;box-shadow:0 2px 12px #1720331a;border-radius:4px;overflow:auto}
 .page{position:relative;margin:auto;width:max-content;max-width:100%}
-.page canvas{display:block;max-width:100%;height:auto}
+.page canvas{display:block;max-width:100%;height:auto;cursor:default}.page.selecting canvas{cursor:crosshair}.selection-box{position:absolute;border:2px solid #e04b35;background:rgba(255,190,60,.16);pointer-events:none;z-index:5}.selection-label{font-size:12px;color:#b13b2b;margin-top:4px}
 .overlay{position:absolute;inset:0;pointer-events:none}
 .wordline{position:absolute;pointer-events:auto;border:1px solid rgba(35,91,170,.18);background:rgba(255,226,90,.035);padding:0;margin:0;cursor:pointer;overflow:hidden;color:transparent;font-size:1px;line-height:1}
 .wordline:hover{background:rgba(255,220,55,.35);border-color:#d3a900}.wordline:active{background:rgba(70,150,255,.28)}
@@ -28,7 +28,7 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
 </style>
 </head>
 <body>
-<header><h1>📚 教材智能点读助手</h1><p>扫描版 PDF · 越南语优先高分辨率 OCR · 点击文字朗读</p></header>
+<header><h1>📚 教材智能点读助手</h1><p>扫描版 PDF · 越南语 OCR · 可手动框选正文 · 点击文字朗读</p></header>
 <main>
 <section class="panel">
  <div class="controls">
@@ -62,11 +62,13 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
   </label>
   <button id="previewVoiceBtn" type="button">试听当前语音</button>
   <label style="display:flex;gap:6px;align-items:center;border:1px solid #ccd4e2;border-radius:8px;padding:8px 10px;background:#fff"><input id="strictText" type="checkbox" checked> 优先正文，过滤插图零散文字</label>
+  <button id="selectBtn" type="button">框选正文区域</button>
+  <button id="clearSelectBtn" type="button">清除框选</button>
   <button id="ocrBtn" class="primary" disabled>识别并生成点读区域</button>
   <button id="stopBtn">停止朗读</button>
  </div>
  <div id="status">请选择一本扫描版 PDF。文件在浏览器中处理，不会上传到本网站服务器。</div>
- <p class="hint">首次识别需要联网下载识别引擎和语言数据。识别结果会保存在当前设备、当前浏览器中；下次选择同一份 PDF 和相同识别语言可快速恢复。可选择设备支持的地域语音、调节语速，并试听当前语音。清除浏览器网站数据后缓存可能消失，不会自动同步到其他设备。点击识别后的文字区域即可朗读。当前启用“优先正文”过滤，会尽量排除插图内零散文字；复杂版面建议检查识别结果。</p>
+ <p class="hint">首次识别需要联网下载识别引擎和语言数据。识别结果保存在当前设备、当前浏览器中。先点击“框选正文区域”，在每一页上拖动鼠标框出要识别的正文；框选过的页面只识别框内，未框选的页面仍识别整页。框选范围内如果包含插图文字，仍可能被识别。点击“清除框选”可重新选择。点击识别后的文字区域即可朗读。</p>
 </section>
 <section id="pages"></section>
 </main>
@@ -77,7 +79,7 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
  const fileInput=document.getElementById('pdfFile'), langSelect=document.getElementById('lang'),
  voiceSelect=document.getElementById('voiceLang'), ocrBtn=document.getElementById('ocrBtn'),
  status=document.getElementById('status'), pages=document.getElementById('pages');
- let pdfDoc=null, worker=null, currentFileName='';
+ let pdfDoc=null, worker=null, currentFileName='', selectionMode=false, dragState=null;
  if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
  const say=(s)=>status.textContent=s;
  fileInput.addEventListener('change', async()=>{
@@ -102,10 +104,63 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
        page.append(canvas,overlay);wrap.append(title,page);pages.append(wrap);
        await pg.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
        page.dataset.renderScale=viewport.scale;
+       page.dataset.selection='';
+       canvas.addEventListener('pointerdown',e=>startSelection(e,page,canvas));
+       canvas.addEventListener('pointermove',e=>moveSelection(e,page,canvas));
+       canvas.addEventListener('pointerup',e=>endSelection(e,page,canvas));
      }
      say(`PDF 已显示：${f.name}（${pdfDoc.numPages} 页）。准备就绪，可以开始识别。`);
    }catch(e){console.error(e);say('打开 PDF 失败：'+(e.message||e));}
  });
+
+ // Manual region selection. Coordinates are stored in the original canvas pixel space.
+ const selectBtn=document.getElementById('selectBtn');
+ selectBtn.addEventListener('click',()=>{
+   selectionMode=!selectionMode; selectBtn.textContent=selectionMode?'结束框选':'框选正文区域';
+   pages.querySelectorAll('.page').forEach(p=>p.classList.toggle('selecting',selectionMode));
+   say(selectionMode?'框选模式已开启：在每一页上按住鼠标拖动，框出需要识别的正文区域。':'框选模式已关闭。已框选页面只识别框内内容，未框选页面识别整页。');
+ });
+ document.getElementById('clearSelectBtn').addEventListener('click',()=>{
+   pages.querySelectorAll('.selection-box').forEach(el=>el.remove());
+   pages.querySelectorAll('.page').forEach(p=>{p.dataset.selection='';p.classList.remove('selecting')});
+   selectionMode=false;selectBtn.textContent='框选正文区域';
+   say('已清除所有框选区域。未框选的页面会识别整页。');
+ });
+ function startSelection(e,page,canvas){
+   if(!selectionMode)return;
+   e.preventDefault(); const r=canvas.getBoundingClientRect();
+   const x=Math.max(0,Math.min(canvas.width,(e.clientX-r.left)*canvas.width/r.width));
+   const y=Math.max(0,Math.min(canvas.height,(e.clientY-r.top)*canvas.height/r.height));
+   page.querySelectorAll('.selection-box').forEach(el=>el.remove());
+   const box=document.createElement('div');box.className='selection-box';page.appendChild(box);
+   dragState={page,canvas,box,startX:x,startY:y,currentX:x,currentY:y,rect:r};
+   canvas.setPointerCapture?.(e.pointerId); updateSelectionBox();
+ }
+ function moveSelection(e,page,canvas){
+   if(!dragState||dragState.page!==page)return;
+   const r=canvas.getBoundingClientRect();
+   dragState.currentX=Math.max(0,Math.min(canvas.width,(e.clientX-r.left)*canvas.width/r.width));
+   dragState.currentY=Math.max(0,Math.min(canvas.height,(e.clientY-r.top)*canvas.height/r.height));
+   updateSelectionBox();
+ }
+ function updateSelectionBox(){
+   if(!dragState)return;const d=dragState, sx=d.canvas.clientWidth/d.canvas.width, sy=d.canvas.clientHeight/d.canvas.height;
+   const x=Math.min(d.startX,d.currentX),y=Math.min(d.startY,d.currentY),w=Math.abs(d.currentX-d.startX),h=Math.abs(d.currentY-d.startY);
+   d.box.style.left=(x*sx)+'px';d.box.style.top=(y*sy)+'px';d.box.style.width=(w*sx)+'px';d.box.style.height=(h*sy)+'px';
+ }
+ function endSelection(e,page,canvas){
+   if(!dragState||dragState.page!==page)return;
+   moveSelection(e,page,canvas);const d=dragState;dragState=null;
+   const x=Math.round(Math.min(d.startX,d.currentX)),y=Math.round(Math.min(d.startY,d.currentY));
+   const w=Math.round(Math.abs(d.currentX-d.startX)),h=Math.round(Math.abs(d.currentY-d.startY));
+   if(w<20||h<20){d.box.remove();page.dataset.selection='';say('框选区域太小，请重新拖动选择更大的正文区域。');return;}
+   page.dataset.selection=JSON.stringify({x,y,w,h});
+   say(`第 ${page.dataset.page} 页已框选正文区域。需要识别的其他页面也可以分别框选。`);
+ }
+ function parseSelection(value,canvas){
+   if(!value)return null;try{const r=JSON.parse(value);if(r.w>0&&r.h>0)return {x:Math.max(0,r.x),y:Math.max(0,r.y),w:Math.min(r.w,canvas.width-r.x),h:Math.min(r.h,canvas.height-r.y)};}catch(e){}return null;
+ }
+ function cropCanvas(source,r){const out=document.createElement('canvas');out.width=Math.max(1,Math.round(r.w));out.height=Math.max(1,Math.round(r.h));out.getContext('2d').drawImage(source,r.x,r.y,r.w,r.h,0,0,out.width,out.height);return out;}
 
  // OCR cache: IndexedDB stores recognized word boxes in this browser on this device.
  const CACHE_DB='textbook-reader-ocr-cache-v1', CACHE_STORE='pages';
@@ -160,7 +215,8 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
      say('正在检查本机是否保存过这份教材的识别结果…');
      const fp=await fileFingerprint(f);
      const strictMode=document.getElementById('strictText').checked;
-     const cacheKey=fp.hex+'|'+language+'|ocr-v3-hires-'+(strictMode?'1':'0');
+     const selectionKey=Array.from(pages.querySelectorAll('.page')).map(p=>p.dataset.selection||'full').join(';');
+     const cacheKey=fp.hex+'|'+language+'|ocr-v4-region-'+(strictMode?'1':'0')+'|'+selectionKey;
      let cached=await cacheGet(cacheKey);
      if(cached && cached.pages && cached.pages.length===pdfDoc.numPages){
        cached.pages.forEach((lines,i)=>showCachedLines(i+1,lines,language));
@@ -179,12 +235,14 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
        activePage=n;
        const page=pages.querySelector(`.page[data-page="${n}"]`);
        const canvas=page.querySelector('canvas');
-       // Prepare a 2x grayscale/high-contrast OCR image. Keep the original PDF canvas untouched.
-       const ocrCanvas=makeOcrCanvas(canvas);
+       // If this page has a selected region, OCR only that crop. The original PDF canvas remains unchanged.
+       const region=parseSelection(page.dataset.selection,canvas);
+       const source=region?cropCanvas(canvas,region):canvas;
+       const ocrCanvas=makeOcrCanvas(source);
        const result=await worker.recognize(ocrCanvas);
-       // Map OCR boxes back to the displayed PDF canvas coordinates.
+       // Map OCR boxes from the 2x OCR image back to the original PDF canvas coordinates.
        const words=(result.data.words||[]).filter(w=>w.text&&w.text.trim()&&w.confidence>20).map(w=>({
-         ...w,bbox:{x0:w.bbox.x0/2,y0:w.bbox.y0/2,x1:w.bbox.x1/2,y1:w.bbox.y1/2}
+         ...w,bbox:{x0:w.bbox.x0/2+(region?region.x:0),y0:w.bbox.y0/2+(region?region.y:0),x1:w.bbox.x1/2+(region?region.x:0),y1:w.bbox.y1/2+(region?region.y:0)}
        }));
        let grouped=groupLines(words);
        if(strictMode) grouped=filterIllustrationLikeLines(grouped, canvas.width, canvas.height, language);
