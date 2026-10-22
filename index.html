@@ -28,15 +28,16 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
 </style>
 </head>
 <body>
-<header><h1>📚 教材智能点读助手</h1><p>扫描版 PDF · OCR 文字识别 · 点击文字朗读</p></header>
+<header><h1>📚 教材智能点读助手</h1><p>扫描版 PDF · 越南语优先高分辨率 OCR · 点击文字朗读</p></header>
 <main>
 <section class="panel">
  <div class="controls">
   <input id="pdfFile" type="file" accept="application/pdf,.pdf">
   <select id="lang" aria-label="识别语言">
-   <option value="chi_sim+eng">简体中文 + 英语</option>
-   <option value="vie+eng">越南语 + 英语</option>
+   <option value="vie" selected>越南语（优先准确识别，推荐）</option>
+   <option value="vie+eng">越南语 + 英语（混合文本）</option>
    <option value="eng">英语</option>
+   <option value="chi_sim+eng">简体中文 + 英语</option>
    <option value="chi_sim">简体中文</option>
   </select>
   <select id="voiceLang" aria-label="地域口音">
@@ -159,7 +160,7 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
      say('正在检查本机是否保存过这份教材的识别结果…');
      const fp=await fileFingerprint(f);
      const strictMode=document.getElementById('strictText').checked;
-     const cacheKey=fp.hex+'|'+language+'|ocr-v2-strict-'+(strictMode?'1':'0');
+     const cacheKey=fp.hex+'|'+language+'|ocr-v3-hires-'+(strictMode?'1':'0');
      let cached=await cacheGet(cacheKey);
      if(cached && cached.pages && cached.pages.length===pdfDoc.numPages){
        cached.pages.forEach((lines,i)=>showCachedLines(i+1,lines,language));
@@ -167,18 +168,24 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
        return;
      }
      if(worker){try{await worker.terminate()}catch(e){} worker=null;}
-     say('正在启动文字识别引擎…首次使用会下载语言数据，请保持页面打开。');
+     say('正在启动文字识别引擎…首次使用会下载越南语识别数据，请保持页面打开。');
      worker=await Tesseract.createWorker(language,1,{logger:m=>{
        if(m.status==='recognizing text')say(`正在识别：第 ${activePage} 页 / ${pdfDoc.numPages} 页（${Math.round((m.progress||0)*100)}%）`);
        else if(m.status)say('识别引擎：'+m.status);
      }});
+     try{await worker.setParameters({tessedit_pageseg_mode:'6',preserve_interword_spaces:'1'});}catch(e){console.warn('OCR parameter setup skipped',e)}
      const savedPages=[];
      for(let n=1;n<=pdfDoc.numPages;n++){
        activePage=n;
        const page=pages.querySelector(`.page[data-page="${n}"]`);
        const canvas=page.querySelector('canvas');
-       const result=await worker.recognize(canvas);
-       const words=(result.data.words||[]).filter(w=>w.text&&w.text.trim()&&w.confidence>25);
+       // Prepare a 2x grayscale/high-contrast OCR image. Keep the original PDF canvas untouched.
+       const ocrCanvas=makeOcrCanvas(canvas);
+       const result=await worker.recognize(ocrCanvas);
+       // Map OCR boxes back to the displayed PDF canvas coordinates.
+       const words=(result.data.words||[]).filter(w=>w.text&&w.text.trim()&&w.confidence>20).map(w=>({
+         ...w,bbox:{x0:w.bbox.x0/2,y0:w.bbox.y0/2,x1:w.bbox.x1/2,y1:w.bbox.y1/2}
+       }));
        let grouped=groupLines(words);
        if(strictMode) grouped=filterIllustrationLikeLines(grouped, canvas.width, canvas.height, language);
        const lines=grouped.map(line=>{
@@ -226,6 +233,24 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
      if(x.height<median*0.7 && x.chars<9 && x.y0>pageH*0.12 && x.y1<pageH*0.88 && !nearby && !longText) return false;
      return true;
    }).map(x=>x.line);
+ }
+
+
+ function makeOcrCanvas(source){
+   const scale=2, out=document.createElement('canvas');
+   out.width=source.width*scale; out.height=source.height*scale;
+   const ctx=out.getContext('2d',{willReadFrequently:true});
+   ctx.fillStyle='#fff';ctx.fillRect(0,0,out.width,out.height);
+   ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+   ctx.drawImage(source,0,0,out.width,out.height);
+   const image=ctx.getImageData(0,0,out.width,out.height),d=image.data;
+   // Gentle contrast enhancement preserves Vietnamese diacritics better than hard thresholding.
+   for(let i=0;i<d.length;i+=4){
+     const gray=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+     const enhanced=Math.max(0,Math.min(255,(gray-128)*1.28+128));
+     d[i]=d[i+1]=d[i+2]=enhanced; d[i+3]=255;
+   }
+   ctx.putImageData(image,0,0);return out;
  }
 
  function groupLines(words){
