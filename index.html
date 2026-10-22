@@ -149,7 +149,7 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
    if(ocrRunning||editMode){say('请先结束当前识别或区域编辑，再进行正文框选。');return;}
    selectionMode=!selectionMode; selectBtn.textContent=selectionMode?'结束框选区域':'框选正文区域';
    pages.querySelectorAll('.page').forEach(p=>p.classList.toggle('selecting',selectionMode));
-   say(selectionMode?'框选模式已开启：在页面上拖动鼠标框出正文。此时请勿点击识别。':'框选已结束。只要存在框选区域，框选区域优先，未框选页面不会进行整页识别。');
+   say(selectionMode?'框选模式已开启：尽量完整框住要识别的文字行，框内可同时有大标题和正文；系统会按分散文字模式识别，不要求它们属于同一文字块。':'框选已结束。只要存在框选区域，框选区域优先，未框选页面不会进行整页识别。');
  });
  document.getElementById('clearSelectBtn').addEventListener('click',()=>{
    if(ocrRunning||editMode){say('请先结束当前识别或区域编辑，再清除正文框选。');return;}
@@ -332,7 +332,7 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
      const pageNodes=Array.from(pages.querySelectorAll('.page'));
      const hasAnySelection=pageNodes.some(p=>!!p.dataset.selection);
      const selectionKey=pageNodes.map(p=>p.dataset.selection|| (hasAnySelection?'skip':'full')).join(';');
-     const cacheKey=fp.hex+'|'+language+'|ocr-v5-region-priority-'+(strictMode?'1':'0')+'|'+selectionKey;
+     const cacheKey=fp.hex+'|'+language+'|ocr-v6-vietnamese-diacritics-region-priority-'+(strictMode?'1':'0')+'|'+selectionKey;
      let cached=await cacheGet(cacheKey);
      if(cached && cached.pages && cached.pages.length===pdfDoc.numPages){
        if(cancelOcrRequested) throw new Error('用户已停止识别');
@@ -365,11 +365,18 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
        }
        const source=region?cropCanvas(canvas,region):canvas;
        const ocrCanvas=makeOcrCanvas(source);
+       // A manually selected crop may contain mixed-size headings and body text.
+       // PSM 6 assumes one uniform text block and can drop body lines when a large heading is nearby.
+       // Use sparse-text segmentation for selected crops so each visible text line is detected independently.
+       await worker.setParameters({tessedit_pageseg_mode: region ? '11' : '6', preserve_interword_spaces:'1'});
        const result=await worker.recognize(ocrCanvas);
        if(cancelOcrRequested) throw new Error('用户已停止识别');
-       // Map OCR boxes from the 2x OCR image back to the original PDF canvas coordinates.
-       const words=(result.data.words||[]).filter(w=>w.text&&w.text.trim()&&w.confidence>20).map(w=>({
-         ...w,bbox:{x0:w.bbox.x0/2+(region?region.x:0),y0:w.bbox.y0/2+(region?region.y:0),x1:w.bbox.x1/2+(region?region.x:0),y1:w.bbox.y1/2+(region?region.y:0)}
+       // Map OCR boxes from the enlarged OCR image back to the original PDF canvas coordinates.
+       // Vietnamese diacritics can be thin and lower-confidence; keep plausible words instead of discarding them too aggressively.
+       const ocrScale=3;
+       const minWordConfidence=language.includes('vie')?5:20;
+       const words=(result.data.words||[]).filter(w=>w.text&&w.text.trim()&&w.confidence>minWordConfidence).map(w=>({
+         ...w,bbox:{x0:w.bbox.x0/ocrScale+(region?region.x:0),y0:w.bbox.y0/ocrScale+(region?region.y:0),x1:w.bbox.x1/ocrScale+(region?region.x:0),y1:w.bbox.y1/ocrScale+(region?region.y:0)}
        }));
        let grouped=groupLines(words);
        if(strictMode) grouped=filterIllustrationLikeLines(grouped, canvas.width, canvas.height, language);
@@ -436,17 +443,17 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
 
 
  function makeOcrCanvas(source){
-   const scale=2, out=document.createElement('canvas');
+   const scale=3, out=document.createElement('canvas');
    out.width=source.width*scale; out.height=source.height*scale;
    const ctx=out.getContext('2d',{willReadFrequently:true});
    ctx.fillStyle='#fff';ctx.fillRect(0,0,out.width,out.height);
    ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
    ctx.drawImage(source,0,0,out.width,out.height);
    const image=ctx.getImageData(0,0,out.width,out.height),d=image.data;
-   // Gentle contrast enhancement preserves Vietnamese diacritics better than hard thresholding.
+   // Mild contrast enhancement only: hard binarization can erase small Vietnamese tone marks (sắc, huyền, hỏi, ngã, nặng) and breve/circumflex/horn marks.
    for(let i=0;i<d.length;i+=4){
      const gray=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
-     const enhanced=Math.max(0,Math.min(255,(gray-128)*1.28+128));
+     const enhanced=Math.max(0,Math.min(255,(gray-128)*1.16+128));
      d[i]=d[i+1]=d[i+2]=enhanced; d[i+3]=255;
    }
    ctx.putImageData(image,0,0);return out;
