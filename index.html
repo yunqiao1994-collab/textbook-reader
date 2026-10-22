@@ -23,6 +23,8 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
 .wordline{position:absolute;pointer-events:auto;border:1px solid rgba(35,91,170,.18);background:rgba(255,226,90,.035);padding:0;margin:0;cursor:pointer;overflow:hidden;color:transparent;font-size:1px;line-height:1}
 .wordline:hover{background:rgba(255,220,55,.35);border-color:#d3a900}.wordline:active{background:rgba(70,150,255,.28)}
 .wordline:focus{outline:2px solid #2b58a4}
+.wordline.edit-selected{background:rgba(255,70,70,.28)!important;border:2px solid #d62828!important;z-index:20}
+.edit-marquee{position:absolute;border:2px dashed #2b58a4;background:rgba(43,88,164,.12);pointer-events:none;z-index:30}
 .page-title{font-size:12px;color:#65718a;margin:4px 0 8px}
 #floatingTools{position:fixed;z-index:1000;left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:8px;align-items:center;padding:9px;background:rgba(255,255,255,.97);border:1px solid #ccd4e2;border-radius:14px;box-shadow:0 6px 24px #1720332b;max-width:calc(100vw - 20px)}#floatingTools button{white-space:nowrap}body{padding-bottom:84px}
 @media(max-width:600px){header h1{font-size:19px}.panel{padding:12px}.controls>*{width:100%}select,button{min-height:42px}}
@@ -67,10 +69,20 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
   <button id="clearSelectBtn" type="button">清除框选</button>
   <button id="ocrBtn" class="primary" disabled>识别并生成点读区域</button>
   <button id="stopOcrBtn" type="button" disabled>停止识别</button>
+  <button id="editRegionsBtn" type="button">编辑点读区域</button>
+  <button id="deleteRegionsBtn" type="button" disabled>删除选中区域</button>
+  <button id="finishEditBtn" type="button" disabled>完成编辑</button>
   <button id="stopBtn">停止朗读</button>
  </div>
  <div id="status">请选择一本扫描版 PDF。文件在浏览器中处理，不会上传到本网站服务器。</div>
- <p class="hint">首次识别需要联网下载识别引擎和语言数据。底部浮动操作栏会随页面滚动保持可见。框选时必须先点击“结束框选区域”，才能开始识别；识别过程中可点击“停止识别”中断。存在任意框选时，框选优先，只识别已框选页面，未框选页面会跳过。点击“清除框选”可恢复整页识别。框内若包含插图文字，仍可能被识别。</p>
+ <div class="controls" style="margin-top:10px">
+  <button id="saveMemoryBtn" type="button" disabled>💾 保存到记忆</button>
+  <select id="savedDocs" aria-label="已保存教材" style="min-width:220px"><option value="">选择已保存的教材</option></select>
+  <button id="loadMemoryBtn" type="button">⚡ 快捷加载</button>
+  <button id="deleteMemoryBtn" type="button">删除保存记录</button>
+ </div>
+ <p class="hint">“保存到记忆”会将 PDF、识别结果、正文框选和删除误识别区域后的状态保存在当前浏览器。以后可从“已保存的教材”快捷加载。数据只保存在这台设备/当前浏览器，不会上传到服务器；清理浏览器数据或更换设备前请另行保留原 PDF。</p>
+ <p class="hint">首次识别需要联网下载识别引擎和语言数据。底部浮动操作栏会随页面滚动保持可见。可点击“编辑点读区域”，在页面拖框选中多个识别框，或单击识别框单独选中，再点击“删除选中区域”删除误识别区域。编辑时朗读暂时关闭。框选时必须先点击“结束框选区域”，才能开始识别；识别过程中可点击“停止识别”中断。存在任意框选时，框选优先，只识别已框选页面，未框选页面会跳过。点击“清除框选”可恢复整页识别。框内若包含插图文字，仍可能被识别。</p>
 </section>
 <section id="pages"></section>
 </main>
@@ -82,21 +94,21 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
  const fileInput=document.getElementById('pdfFile'), langSelect=document.getElementById('lang'),
  voiceSelect=document.getElementById('voiceLang'), ocrBtn=document.getElementById('ocrBtn'),
  status=document.getElementById('status'), pages=document.getElementById('pages');
- let pdfDoc=null, worker=null, currentFileName='', selectionMode=false, dragState=null, ocrRunning=false, cancelOcrRequested=false;
+ let pdfDoc=null, worker=null, currentFileName='', currentFileBytes=null, currentDocId='', pendingRestore=null, selectionMode=false, editMode=false, dragState=null, editDragState=null, ocrRunning=false, cancelOcrRequested=false;
  if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
  const say=(s)=>status.textContent=s;
  // Keep selection and OCR controls in a floating toolbar so they remain accessible while scrolling pages.
  const floatingTools=document.getElementById('floatingTools');
- ['selectBtn','clearSelectBtn','ocrBtn','stopOcrBtn'].forEach(id=>{const el=document.getElementById(id);if(el)floatingTools.appendChild(el);});
+ ['selectBtn','clearSelectBtn','ocrBtn','stopOcrBtn','editRegionsBtn','deleteRegionsBtn','finishEditBtn'].forEach(id=>{const el=document.getElementById(id);if(el)floatingTools.appendChild(el);});
  fileInput.addEventListener('change', async()=>{
    if(ocrRunning){cancelOcrRequested=true; try{if(worker)worker.terminate()}catch(e){} worker=null;}
-   ocrRunning=false; cancelOcrRequested=false; selectionMode=false; selectBtn.textContent='框选正文区域';
+   ocrRunning=false; cancelOcrRequested=false; selectionMode=false; editMode=false; selectBtn.textContent='框选正文区域'; editRegionsBtn.disabled=false; finishEditBtn.disabled=true; deleteRegionsBtn.disabled=true;
    pages.innerHTML=''; pdfDoc=null; ocrBtn.disabled=true; document.getElementById('stopOcrBtn').disabled=true;
    const f=fileInput.files[0]; if(!f)return;
    if(f.type!=='application/pdf'&&!f.name.toLowerCase().endsWith('.pdf')){say('目前此版本先支持 PDF 文件。');return}
    currentFileName=f.name; say('正在打开 PDF…');
    try{
-     const bytes=await f.arrayBuffer();
+     const bytes=await f.arrayBuffer(); currentFileBytes=bytes.slice(0);
      pdfDoc=await pdfjsLib.getDocument({data:bytes}).promise;
      say(`已打开：${f.name}\n共 ${pdfDoc.numPages} 页。点击“识别并生成点读区域”开始 OCR。`);
      ocrBtn.disabled=false;
@@ -113,24 +125,34 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
        await pg.render({canvasContext:canvas.getContext('2d'),viewport}).promise;
        page.dataset.renderScale=viewport.scale;
        page.dataset.selection='';
-       canvas.addEventListener('pointerdown',e=>startSelection(e,page,canvas));
-       canvas.addEventListener('pointermove',e=>moveSelection(e,page,canvas));
-       canvas.addEventListener('pointerup',e=>endSelection(e,page,canvas));
+       canvas.addEventListener('pointerdown',e=>{if(editMode)startEditSelection(e,page,canvas);else startSelection(e,page,canvas)});
+       canvas.addEventListener('pointermove',e=>{if(editMode)moveEditSelection(e,page,canvas);else moveSelection(e,page,canvas)});
+       canvas.addEventListener('pointerup',e=>{if(editMode)endEditSelection(e,page,canvas);else endSelection(e,page,canvas)});
      }
-     say(`PDF 已显示：${f.name}（${pdfDoc.numPages} 页）。准备就绪，可以开始识别。`);
+     if(pendingRestore){
+       const snap=pendingRestore; pendingRestore=null;
+       langSelect.value=snap.language||langSelect.value;
+       document.getElementById('strictText').checked=snap.strictMode!==false;
+       (snap.selections||[]).forEach((sel,i)=>{const pg=pages.querySelector(`.page[data-page="${i+1}"]`);if(pg&&sel)pg.dataset.selection=sel;});
+       (snap.pages||[]).forEach((lines,i)=>{if(Array.isArray(lines))showCachedLines(i+1,lines,langSelect.value);});
+       currentDocId=snap.id||'';
+       say(`已快捷加载记忆教材：${f.name}。识别结果及已修改的点读区域已恢复。`);
+     }else{say(`PDF 已显示：${f.name}（${pdfDoc.numPages} 页）。准备就绪，可以开始识别。`);}
+     document.getElementById('saveMemoryBtn').disabled=false;
+     await refreshSavedDocs();
    }catch(e){console.error(e);say('打开 PDF 失败：'+(e.message||e));}
  });
 
  // Manual region selection. Coordinates are stored in the original canvas pixel space.
  const selectBtn=document.getElementById('selectBtn');
  selectBtn.addEventListener('click',()=>{
-   if(ocrRunning){say('正在识别，请先点击“停止识别”或等待识别结束，再进行框选。');return;}
+   if(ocrRunning||editMode){say('请先结束当前识别或区域编辑，再进行正文框选。');return;}
    selectionMode=!selectionMode; selectBtn.textContent=selectionMode?'结束框选区域':'框选正文区域';
    pages.querySelectorAll('.page').forEach(p=>p.classList.toggle('selecting',selectionMode));
    say(selectionMode?'框选模式已开启：在页面上拖动鼠标框出正文。此时请勿点击识别。':'框选已结束。只要存在框选区域，框选区域优先，未框选页面不会进行整页识别。');
  });
  document.getElementById('clearSelectBtn').addEventListener('click',()=>{
-   if(ocrRunning){say('正在识别，请先停止识别，再清除框选。');return;}
+   if(ocrRunning||editMode){say('请先结束当前识别或区域编辑，再清除正文框选。');return;}
    dragState=null;
    pages.querySelectorAll('.selection-box').forEach(el=>el.remove());
    pages.querySelectorAll('.page').forEach(p=>{p.dataset.selection='';p.classList.remove('selecting')});
@@ -194,7 +216,28 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
      tx.oncomplete=()=>resolve(true);tx.onerror=()=>reject(tx.error);
    });}catch(e){console.warn('OCR cache write failed',e);return false;}
  }
- async function fileFingerprint(file){
+ const DOC_LIBRARY_KEY='doclib|';
+ function listSavedDocs(){return new Promise(async(resolve,reject)=>{try{const db=await openCacheDB();const tx=db.transaction(CACHE_STORE,'readonly'),req=tx.objectStore(CACHE_STORE).getAll();req.onsuccess=()=>resolve((req.result||[]).filter(x=>x.key.startsWith(DOC_LIBRARY_KEY)).map(x=>x.value));req.onerror=()=>reject(req.error);}catch(e){reject(e);}});}
+ async function refreshSavedDocs(){const sel=document.getElementById('savedDocs');const keep=sel.value;sel.innerHTML='<option value="">选择已保存的教材</option>';try{const docs=await listSavedDocs();docs.sort((a,b)=>(b.savedAt||0)-(a.savedAt||0));docs.forEach(d=>{const o=document.createElement('option');o.value=d.id;o.textContent=`${d.name} · ${new Date(d.savedAt).toLocaleString()}`;sel.appendChild(o);});if(docs.some(d=>d.id===keep))sel.value=keep;}catch(e){console.warn(e);}}
+ function getCurrentPageLines(){return Array.from(pages.querySelectorAll('.page')).map(pg=>{const canvas=pg.querySelector('canvas');const sx=canvas.clientWidth/canvas.width,sy=canvas.clientHeight/canvas.height;return Array.from(pg.querySelectorAll('.wordline')).map(b=>{const x=parseFloat(b.style.left)||0,y=parseFloat(b.style.top)||0,w=parseFloat(b.style.width)||0,h=parseFloat(b.style.height)||0;return {bbox:{x0:x/sx,y0:y/sy,x1:(x+w)/sx,y1:(y+h)/sy},text:b.textContent||''};});});}
+ document.getElementById('saveMemoryBtn').addEventListener('click',async()=>{
+   if(!pdfDoc||!currentFileBytes){say('请先打开 PDF 文件。');return;} if(ocrRunning){say('请等识别结束后再保存。');return;}
+   try{
+     const fp=await crypto.subtle.digest('SHA-256',currentFileBytes);const id=Array.from(new Uint8Array(fp)).map(b=>b.toString(16).padStart(2,'0')).join('');
+     const existing=await cacheGet(DOC_LIBRARY_KEY+id);
+     const snapshot={id,name:currentFileName||'教材.pdf',savedAt:Date.now(),bytes:currentFileBytes.slice(0),language:langSelect.value,strictMode:document.getElementById('strictText').checked,selections:Array.from(pages.querySelectorAll('.page')).map(p=>p.dataset.selection||''),pages:getCurrentPageLines()};
+     await cacheSet(DOC_LIBRARY_KEY+id,snapshot);currentDocId=id;await refreshSavedDocs();document.getElementById('savedDocs').value=id;
+     say(`已保存“${snapshot.name}”及当前状态。下次可在“已保存的教材”中选择并快捷加载。${existing?'已更新原记忆记录。':''}`);
+   }catch(e){console.error(e);say('保存失败：浏览器可能没有足够的本地存储空间。请尝试较小的 PDF。');}
+ });
+ document.getElementById('loadMemoryBtn').addEventListener('click',async()=>{
+   const id=document.getElementById('savedDocs').value;if(!id){say('请先选择一份已保存的教材。');return;}if(ocrRunning){say('请先停止识别，再加载其他教材。');return;}
+   const snap=await cacheGet(DOC_LIBRARY_KEY+id);if(!snap||!snap.bytes){say('找不到保存的 PDF 数据，请重新打开原文件。');return;}
+   try{pendingRestore=snap;const file=new File([snap.bytes],snap.name||'教材.pdf',{type:'application/pdf'});const dt=new DataTransfer();dt.items.add(file);fileInput.files=dt.files;fileInput.dispatchEvent(new Event('change',{bubbles:true}));}
+   catch(e){pendingRestore=null;console.error(e);say('快捷加载失败：'+(e.message||e));}
+ });
+ document.getElementById('deleteMemoryBtn').addEventListener('click',async()=>{const id=document.getElementById('savedDocs').value;if(!id){say('请先选择要删除的保存记录。');return;}if(!confirm('删除这份教材的本地记忆记录？不会删除电脑中的原 PDF。'))return;try{const db=await openCacheDB();await new Promise((resolve,reject)=>{const tx=db.transaction(CACHE_STORE,'readwrite');tx.objectStore(CACHE_STORE).delete(DOC_LIBRARY_KEY+id);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});await refreshSavedDocs();say('已删除该教材的本地记忆记录。');}catch(e){say('删除失败：'+(e.message||e));}});
+  async function fileFingerprint(file){
    const bytes=await file.arrayBuffer();
    const digest=await crypto.subtle.digest('SHA-256',bytes);
    const hex=Array.from(new Uint8Array(digest)).map(b=>b.toString(16).padStart(2,'0')).join('');
@@ -212,16 +255,72 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
      b.setAttribute('aria-label','朗读：'+text);b.textContent=text;
      b.style.left=(x0*scaleX)+'px';b.style.top=(y0*scaleY)+'px';
      b.style.width=Math.max(8,(x1-x0)*scaleX)+'px';b.style.height=Math.max(8,(y1-y0)*scaleY)+'px';
-     b.addEventListener('click',()=>speak(text));overlay.appendChild(b);
+     b.addEventListener('click',e=>{if(editMode){e.preventDefault();e.stopPropagation();b.classList.toggle('edit-selected');updateEditDeleteButton();}else speak(text)});overlay.appendChild(b);
    });
    const wrap=page.closest('.page-wrap'),title=wrap&&wrap.querySelector('.page-title');
-   if(title)title.textContent=`第 ${pageNum} 页 · 已识别 ${lines.length} 行（缓存）`;
+   if(title)title.textContent=`第 ${pageNum} 页 · 已识别 ${lines.length} 行`;
+   const saveBtn=document.getElementById('saveMemoryBtn');if(saveBtn)saveBtn.disabled=false;
  }
 
+ const editRegionsBtn=document.getElementById('editRegionsBtn');
+ const deleteRegionsBtn=document.getElementById('deleteRegionsBtn');
+ const finishEditBtn=document.getElementById('finishEditBtn');
+ function updateEditDeleteButton(){deleteRegionsBtn.disabled=!editMode||!pages.querySelector('.wordline.edit-selected');}
+ editRegionsBtn.addEventListener('click',()=>{
+   if(ocrRunning||selectionMode){say('请先结束识别或正文框选，再编辑点读区域。');return;}
+   editMode=true;editRegionsBtn.disabled=true;finishEditBtn.disabled=false;
+   pages.querySelectorAll('.page').forEach(p=>p.classList.add('editing-regions'));
+   say('点读区域编辑已开启：拖动鼠标框选多个识别框，或单击识别框选择/取消选择。选中后点击“删除选中区域”。');
+ });
+ finishEditBtn.addEventListener('click',()=>{
+   editMode=false;editDragState=null;editRegionsBtn.disabled=false;finishEditBtn.disabled=true;deleteRegionsBtn.disabled=true;
+   pages.querySelectorAll('.page').forEach(p=>p.classList.remove('editing-regions'));
+   pages.querySelectorAll('.wordline').forEach(b=>b.classList.remove('edit-selected'));
+   say('已完成点读区域编辑。删除操作立即生效；重新识别可能重新生成这些区域。');
+ });
+ deleteRegionsBtn.addEventListener('click',()=>{
+   if(!editMode)return;
+   const selected=pages.querySelectorAll('.wordline.edit-selected');
+   const count=selected.length;
+   selected.forEach(b=>b.remove());updateEditDeleteButton();
+   say(count?`已删除 ${count} 个误识别点读区域。`:'请先选择需要删除的区域。');
+ });
+ document.addEventListener('keydown',e=>{
+   if(editMode&&(e.key==='Delete'||e.key==='Backspace')&&!(e.target instanceof HTMLInputElement)&&!(e.target instanceof HTMLTextAreaElement)){
+     e.preventDefault();deleteRegionsBtn.click();
+   }
+ });
+ function canvasPoint(e,canvas){const r=canvas.getBoundingClientRect();return {x:Math.max(0,Math.min(canvas.width,(e.clientX-r.left)*canvas.width/r.width)),y:Math.max(0,Math.min(canvas.height,(e.clientY-r.top)*canvas.height/r.height))};}
+ function startEditSelection(e,page,canvas){
+   if(!editMode||ocrRunning)return;
+   e.preventDefault();const p=canvasPoint(e,canvas);
+   const box=document.createElement('div');box.className='edit-marquee';page.appendChild(box);
+   editDragState={page,canvas,box,startX:p.x,startY:p.y,x:p.x,y:p.y};canvas.setPointerCapture?.(e.pointerId);updateEditMarquee();
+ }
+ function moveEditSelection(e,page,canvas){
+   if(!editDragState||editDragState.page!==page)return;
+   const p=canvasPoint(e,canvas);editDragState.x=p.x;editDragState.y=p.y;updateEditMarquee();
+ }
+ function updateEditMarquee(){
+   if(!editDragState)return;const d=editDragState,sx=d.canvas.clientWidth/d.canvas.width,sy=d.canvas.clientHeight/d.canvas.height;
+   const x=Math.min(d.startX,d.x),y=Math.min(d.startY,d.y),w=Math.abs(d.x-d.startX),h=Math.abs(d.y-d.startY);
+   Object.assign(d.box.style,{left:(x*sx)+'px',top:(y*sy)+'px',width:(w*sx)+'px',height:(h*sy)+'px'});
+ }
+ function endEditSelection(e,page,canvas){
+   if(!editDragState||editDragState.page!==page)return;moveEditSelection(e,page,canvas);
+   const d=editDragState;editDragState=null;const r=d.box.getBoundingClientRect();d.box.remove();
+   if(r.width<5&&r.height<5){updateEditDeleteButton();return;}
+   const overlay=page.querySelector('.overlay');const or=overlay.getBoundingClientRect();
+   const x0=r.left-or.left,y0=r.top-or.top,x1=r.right-or.left,y1=r.bottom-or.top;
+   overlay.querySelectorAll('.wordline').forEach(b=>{
+     const br=b.getBoundingClientRect();if(br.right>or.left+x0&&br.left<or.left+x1&&br.bottom>or.top+y0&&br.top<or.top+y1)b.classList.add('edit-selected');
+   });
+   updateEditDeleteButton();const n=pages.querySelectorAll('.wordline.edit-selected').length;say(`已选中 ${n} 个点读区域。点击“删除选中区域”即可删除。`);
+ }
  ocrBtn.addEventListener('click',async()=>{
    if(!pdfDoc)return;
    if(ocrRunning){say('识别正在进行中。需要停止时请点击“停止识别”。');return;}
-   if(selectionMode){say('请先点击“结束框选区域”结束框选，再开始识别，避免操作冲突。');return;}
+   if(selectionMode||editMode){say('请先结束正文框选或点读区域编辑，再开始识别，避免操作冲突。');return;}
    ocrRunning=true; cancelOcrRequested=false; ocrBtn.disabled=true;
    document.getElementById('stopOcrBtn').disabled=false; selectBtn.disabled=true; document.getElementById('clearSelectBtn').disabled=true;
    try{
@@ -299,6 +398,7 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
      cancelOcrRequested=false;
    }
  });
+ refreshSavedDocs();
  document.getElementById('stopOcrBtn').addEventListener('click',async()=>{
    if(!ocrRunning)return;
    cancelOcrRequested=true; say('正在停止识别，请稍候…');
