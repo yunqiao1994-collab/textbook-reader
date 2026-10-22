@@ -20,8 +20,8 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
 .page{position:relative;margin:auto;width:max-content;max-width:100%}
 .page canvas{display:block;max-width:100%;height:auto}
 .overlay{position:absolute;inset:0;pointer-events:none}
-.wordline{position:absolute;pointer-events:auto;border:1px solid transparent;background:rgba(255,226,90,.01);padding:0;margin:0;cursor:pointer;overflow:hidden;color:transparent;font-size:1px;line-height:1}
-.wordline:hover{background:rgba(255,220,55,.25);border-color:#d3a900}
+.wordline{position:absolute;pointer-events:auto;border:1px solid rgba(35,91,170,.18);background:rgba(255,226,90,.035);padding:0;margin:0;cursor:pointer;overflow:hidden;color:transparent;font-size:1px;line-height:1}
+.wordline:hover{background:rgba(255,220,55,.35);border-color:#d3a900}.wordline:active{background:rgba(70,150,255,.28)}
 .wordline:focus{outline:2px solid #2b58a4}
 .page-title{font-size:12px;color:#65718a;margin:4px 0 8px}
 @media(max-width:600px){header h1{font-size:19px}.panel{padding:12px}.controls>*{width:100%}select,button{min-height:42px}}
@@ -60,11 +60,12 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
    <span id="rateValue">1.0×</span>
   </label>
   <button id="previewVoiceBtn" type="button">试听当前语音</button>
+  <label style="display:flex;gap:6px;align-items:center;border:1px solid #ccd4e2;border-radius:8px;padding:8px 10px;background:#fff"><input id="strictText" type="checkbox" checked> 优先正文，过滤插图零散文字</label>
   <button id="ocrBtn" class="primary" disabled>识别并生成点读区域</button>
   <button id="stopBtn">停止朗读</button>
  </div>
  <div id="status">请选择一本扫描版 PDF。文件在浏览器中处理，不会上传到本网站服务器。</div>
- <p class="hint">首次识别需要联网下载识别引擎和语言数据。识别结果会保存在当前设备、当前浏览器中；下次选择同一份 PDF 和相同识别语言可快速恢复。可选择设备支持的地域语音、调节语速，并试听当前语音。清除浏览器网站数据后缓存可能消失，不会自动同步到其他设备。点击识别后的文字区域即可朗读。</p>
+ <p class="hint">首次识别需要联网下载识别引擎和语言数据。识别结果会保存在当前设备、当前浏览器中；下次选择同一份 PDF 和相同识别语言可快速恢复。可选择设备支持的地域语音、调节语速，并试听当前语音。清除浏览器网站数据后缓存可能消失，不会自动同步到其他设备。点击识别后的文字区域即可朗读。当前启用“优先正文”过滤，会尽量排除插图内零散文字；复杂版面建议检查识别结果。</p>
 </section>
 <section id="pages"></section>
 </main>
@@ -157,7 +158,8 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
      const f=fileInput.files[0], language=langSelect.value;
      say('正在检查本机是否保存过这份教材的识别结果…');
      const fp=await fileFingerprint(f);
-     const cacheKey=fp.hex+'|'+language+'|ocr-v1';
+     const strictMode=document.getElementById('strictText').checked;
+     const cacheKey=fp.hex+'|'+language+'|ocr-v2-strict-'+(strictMode?'1':'0');
      let cached=await cacheGet(cacheKey);
      if(cached && cached.pages && cached.pages.length===pdfDoc.numPages){
        cached.pages.forEach((lines,i)=>showCachedLines(i+1,lines,language));
@@ -176,8 +178,9 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
        const page=pages.querySelector(`.page[data-page="${n}"]`);
        const canvas=page.querySelector('canvas');
        const result=await worker.recognize(canvas);
-       const words=(result.data.words||[]).filter(w=>w.text&&w.text.trim()&&w.confidence>15);
-       const grouped=groupLines(words);
+       const words=(result.data.words||[]).filter(w=>w.text&&w.text.trim()&&w.confidence>25);
+       let grouped=groupLines(words);
+       if(strictMode) grouped=filterIllustrationLikeLines(grouped, canvas.width, canvas.height, language);
        const lines=grouped.map(line=>{
          const xs=line.words.map(w=>w.bbox.x0),ys=line.words.map(w=>w.bbox.y0),
                xe=line.words.map(w=>w.bbox.x1),ye=line.words.map(w=>w.bbox.y1);
@@ -197,6 +200,34 @@ input[type=file]{max-width:100%}.hint{font-size:13px;color:#5d687d;line-height:1
    finally{ocrBtn.disabled=false;}
  });
  let activePage=1;
+ // Heuristic layout filter: keep text-like lines and suppress isolated, tiny labels often found inside illustrations.
+ // It never extracts/converts image pixels; OCR only returns text candidates. This is a conservative heuristic, not perfect image understanding.
+ function filterIllustrationLikeLines(lines, pageW, pageH, language){
+   if(!lines.length) return lines;
+   const stats=lines.map(line=>{
+     const xs=line.words.map(w=>w.bbox.x0), ys=line.words.map(w=>w.bbox.y0),
+       xe=line.words.map(w=>w.bbox.x1), ye=line.words.map(w=>w.bbox.y1);
+     const x0=Math.min(...xs), y0=Math.min(...ys), x1=Math.max(...xe), y1=Math.max(...ye);
+     const text=line.words.map(w=>w.text).join(' ');
+     return {line,x0,y0,x1,y1,width:x1-x0,height:y1-y0,text,chars:text.replace(/\s/g,'').length,conf:line.words.reduce((a,w)=>a+w.confidence,0)/line.words.length};
+   });
+   const heights=stats.map(x=>x.height).filter(h=>h>0).sort((a,b)=>a-b);
+   const median=heights[Math.floor(heights.length/2)]||12;
+   return stats.filter((x,i)=>{
+     // Reject low-confidence, very small, isolated snippets; preserve longer sentence-like text.
+     if(x.conf<32 && x.chars<5) return false;
+     if(x.height<median*0.48 && x.chars<7) return false;
+     const nearby=stats.some((y,j)=>i!==j && Math.abs(y.y0-x.y0)<median*2.2 && (Math.abs(y.x0-x.x1)<pageW*0.12 || Math.abs(y.x1-x.x0)<pageW*0.12));
+     const hasSentencePunctuation=/[。！？；：,.!?;:]/.test(x.text);
+     const longText=x.chars>=12;
+     // Tiny isolated text in an illustration is commonly short and separated from normal lines.
+     if(!nearby && !hasSentencePunctuation && x.chars<10 && x.width<pageW*0.22) return false;
+     // Drop very small text far from the main body when it looks like a lone illustration label.
+     if(x.height<median*0.7 && x.chars<9 && x.y0>pageH*0.12 && x.y1<pageH*0.88 && !nearby && !longText) return false;
+     return true;
+   }).map(x=>x.line);
+ }
+
  function groupLines(words){
    const lines=[];
    for(const w of words.slice().sort((a,b)=>((a.bbox.y0+a.bbox.y1)/2)-((b.bbox.y0+b.bbox.y1)/2)||a.bbox.x0-b.bbox.x0)){
